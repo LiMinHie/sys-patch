@@ -3,6 +3,7 @@
 #include <algorithm> // for std::min
 #include <bit> // for std::byteswap
 #include <utility> // std::unreachable
+#include <cstdio> // for snprintf
 #include <switch.h>
 #include "minIni/minIni.h"
 
@@ -94,7 +95,7 @@ struct Patterns {
     const s32 patch_offset; // patch offset relative to inst_offset
 
     bool (*const cond)(u32 inst); // check condition of the instruction
-    PatchData (*const patch)(u32 inst); // the patch data to be applied
+    const PatchData patch_data; // the patch data to be applied
     bool (*const applied)(const u8* data, u32 inst); // check to see if patch already applied
 
     bool enabled; // controlled by config.ini
@@ -110,6 +111,10 @@ struct Patterns {
     u32 match_count{};
     u64 last_match_addr{};
     bool has_last_match{};
+
+    // Cached version check result
+    mutable bool version_checked{};
+    mutable bool version_valid{};
 };
 
 struct PatchEntry {
@@ -193,54 +198,50 @@ constexpr PatchData ctest_patch_data{ "0x00309AD2001EA1F2610100D4E0031FAAC0035FD
 constexpr PatchData strb0_patch_data{ "0x7F020039"};
 //strb wzr, [x19]
 
-constexpr auto ret0_patch(u32 inst) -> PatchData { return ret0_patch_data; }
-constexpr auto ret1_patch(u32 inst) -> PatchData { return ret1_patch_data; }
-constexpr auto mov0_ret_patch(u32 inst) -> PatchData { return mov0_ret_patch_data; }
-constexpr auto nop_patch(u32 inst) -> PatchData { return nop_patch_data; }
-constexpr auto mov0_patch(u32 inst) -> PatchData { return mov0_patch_data; }
-constexpr auto mov2_patch(u32 inst) -> PatchData { return mov2_patch_data; }
-constexpr auto cmp_patch(u32 inst) -> PatchData { return cmp_patch_data; }
-constexpr auto ctest_patch(u32 inst) -> PatchData { return ctest_patch_data; }
-constexpr auto strb0_patch(u32 inst) -> PatchData { return strb0_patch_data; }
+// Generic applied checker that compares patch data against buffer
+constexpr auto generic_applied(const u8* data, u32 inst, const PatchData& patch) -> bool {
+    return patch.cmp(data);
+}
 
+// Specializations for each patch type
 constexpr auto ret0_applied(const u8* data, u32 inst) -> bool {
-    return ret0_patch(inst).cmp(data);
+    return generic_applied(data, inst, ret0_patch_data);
 }
 
 constexpr auto ret1_applied(const u8* data, u32 inst) -> bool {
-    return ret1_patch(inst).cmp(data);
+    return generic_applied(data, inst, ret1_patch_data);
 }
 
 constexpr auto nop_applied(const u8* data, u32 inst) -> bool {
-    return nop_patch(inst).cmp(data);
+    return generic_applied(data, inst, nop_patch_data);
 }
 
 constexpr auto cmp_applied(const u8* data, u32 inst) -> bool {
-    return cmp_patch(inst).cmp(data);
+    return generic_applied(data, inst, cmp_patch_data);
 }
 
 constexpr auto mov0_ret_applied(const u8* data, u32 inst) -> bool {
-    return mov0_ret_patch(inst).cmp(data);
+    return generic_applied(data, inst, mov0_ret_patch_data);
 }
 
 constexpr auto mov0_applied(const u8* data, u32 inst) -> bool {
-    return mov0_patch(inst).cmp(data);
+    return generic_applied(data, inst, mov0_patch_data);
 }
 
 constexpr auto mov2_applied(const u8* data, u32 inst) -> bool {
-    return mov2_patch(inst).cmp(data);
+    return generic_applied(data, inst, mov2_patch_data);
 }
 
 constexpr auto ctest_applied(const u8* data, u32 inst) -> bool {
-    return ctest_patch(inst).cmp(data);
+    return generic_applied(data, inst, ctest_patch_data);
 }
 
 constexpr auto strb0_applied(const u8* data, u32 inst) -> bool {
-    return strb0_patch(inst).cmp(data);
+    return generic_applied(data, inst, strb0_patch_data);
 }
 
 // patterns should be optimized in such a manner that they yield only one result, unless match_index selects a specific result.
-// patterns might yield results for more firmware versions, but if it yields more than one result (per firmware version), it should be condensed to near similar versions instead which only yields one result.
+// patterns might yield results for more firmware versions, but if it yields more than one result (per firmware version), it should be condensed to near similar versions instead which only yields[...]
 // a pattern should not contain the bytes being patched, they should be wildcarded.
 // if the bytes being patched align with the patch partially, then the partial bytes can be in the pattern, the same applies to if the pattern contains the length of the patch.
 // the bytes being tested are defined by the _cond, and does not need to be in the pattern, and shouldn't be in the pattern, if the bytes being tested are also the bytes being patched.
@@ -259,57 +260,57 @@ constexpr auto strb0_applied(const u8* data, u32 inst) -> bool {
 // designing new patterns should ideally conform to specification above.
 
 constinit Patterns fs_patterns[] = {
-    { "noacidsigchk_1.0.0-9.2.0", "0xC8FE4739", -24, 0, bl_cond, ret0_patch, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
-    { "noacidsigchk_1.0.0-9.2.0", "0x0210911F000072", -5, 0, bl_cond, ret0_patch, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
-    { "noncasigchk_1.0.0-3.0.2", "0x88..42..58", -4, 0, tbz_cond, nop_patch, nop_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(3,0,2) },
-    { "noncasigchk_4.0.0-16.1.0", "0x1E4839....00......0054", -17, 0, tbz_cond, nop_patch, nop_applied, true, 0, MAKEHOSVERSION(4,0,0), MAKEHOSVERSION(16,1,0) },
-    { "noncasigchk_17.0.0+", "0x0694....00..42..0091", -18, 0, tbz_cond, nop_patch, nop_applied, true, 0, MAKEHOSVERSION(17,0,0), FW_VER_ANY },
-    { "nocntchk_1.0.0-18.1.0", "0x40F9........081C00121F05", 2, 0, bl_cond, ret0_patch, ret0_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(18,1,0) },
-    { "nocntchk_19.0.0+", "0x40F9............40B9091C", 2, 0, bl_cond, ret0_patch, ret0_applied, true, 0, MAKEHOSVERSION(19,0,0), FW_VER_ANY },
+    { "noacidsigchk_1.0.0-9.2.0", "0xC8FE4739", -24, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
+    { "noacidsigchk_1.0.0-9.2.0", "0x0210911F000072", -5, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
+    { "noncasigchk_1.0.0-3.0.2", "0x88..42..58", -4, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(3,0,2) },
+    { "noncasigchk_4.0.0-16.1.0", "0x1E4839....00......0054", -17, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(4,0,0), MAKEHOSVERSION(16,1,0) },
+    { "noncasigchk_17.0.0+", "0x0694....00..42..0091", -18, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(17,0,0), FW_VER_ANY },
+    { "nocntchk_1.0.0-18.1.0", "0x40F9........081C00121F05", 2, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(18,1,0) },
+    { "nocntchk_19.0.0+", "0x40F9............40B9091C", 2, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, MAKEHOSVERSION(19,0,0), FW_VER_ANY },
 };
 
 constinit Patterns ldr_patterns[] = {
-    { "noacidsigchk_10.0.0+", "0x009401C0BE121F00", 6, 2, cmp_cond, cmp_patch, cmp_applied, true, 0, FW_VER_ANY }, // 1F00016B - cmp w0, w1 patched to 1F00006B - cmp w0, w0
+    { "noacidsigchk_10.0.0+", "0x009401C0BE121F00", 6, 2, cmp_cond, cmp_patch_data, cmp_applied, true, 0, FW_VER_ANY }, // 1F00016B - cmp w0, w1 patched to 1F00006B - cmp w0, w0
 };
 
 constinit Patterns erpt_patterns[] = {
-    { "no_erpt", "0xFD7B02A9FD830091F55B04A9", -4, 0, sub_cond, mov0_ret_patch, mov0_ret_applied, true, 0, FW_VER_ANY }, // FF4305D1 - sub sp, sp, #0x150 patched to E0031F2AC0035FD6 - mov w0, wzr, ret 
+    { "no_erpt", "0xFD7B02A9FD830091F55B04A9", -4, 0, sub_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, FW_VER_ANY }, // FF4305D1 - sub sp, sp, #0x150 patched to E0031F2AC0035FD6 - mov w0, wzr[...]
 };
 
 constinit Patterns es_patterns[] = {
-    { "es_1.0.0-8.1.1", "0x0091....0094..7E4092", 10, 0, es_cond, mov0_patch, mov0_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(8,1,1) },
-    { "es_9.0.0-11.0.1", "0x00..........A0....D1....FF97", 14, 0, es_cond, mov0_patch, mov0_applied, true, 0, MAKEHOSVERSION(9,0,0), MAKEHOSVERSION(11,0,1) },
-    { "es_12.0.0-18.1.0", "0x02........D2..52....0091", 32, 0, es_cond, mov0_patch, mov0_applied, true, 0, MAKEHOSVERSION(12,0,0), MAKEHOSVERSION(18,1,0) },
-    { "es_19.0.0-21.2.0", "0xA1........031F2A....0091", 32, 0, es_cond, mov0_patch, mov0_applied, true, 0, MAKEHOSVERSION(19,0,0), MAKEHOSVERSION(21,2,0) },
-    { "es_22.0.0+", "0xA0630091....FE97A08300D1....FE97", 16, 0, es_cond, mov0_patch, mov0_applied, true, 0, MAKEHOSVERSION(22,0,0), FW_VER_ANY },
+    { "es_1.0.0-8.1.1", "0x0091....0094..7E4092", 10, 0, es_cond, mov0_patch_data, mov0_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(8,1,1) },
+    { "es_9.0.0-11.0.1", "0x00..........A0....D1....FF97", 14, 0, es_cond, mov0_patch_data, mov0_applied, true, 0, MAKEHOSVERSION(9,0,0), MAKEHOSVERSION(11,0,1) },
+    { "es_12.0.0-18.1.0", "0x02........D2..52....0091", 32, 0, es_cond, mov0_patch_data, mov0_applied, true, 0, MAKEHOSVERSION(12,0,0), MAKEHOSVERSION(18,1,0) },
+    { "es_19.0.0-21.2.0", "0xA1........031F2A....0091", 32, 0, es_cond, mov0_patch_data, mov0_applied, true, 0, MAKEHOSVERSION(19,0,0), MAKEHOSVERSION(21,2,0) },
+    { "es_22.0.0+", "0xA0630091....FE97A08300D1....FE97", 16, 0, es_cond, mov0_patch_data, mov0_applied, true, 0, MAKEHOSVERSION(22,0,0), FW_VER_ANY },
 };
 
 constinit Patterns am_patterns[] = {
-    { "am_homebrew_fix_22.0.0+", "0x682646391F0500716100005460420691794DFF97", 16, 0, bl_cond, nop_patch, nop_applied, true, 0, MAKEHOSVERSION(22,0,0), FW_VER_ANY },
+    { "am_homebrew_fix_22.0.0+", "0x682646391F0500716100005460420691794DFF97", 16, 0, bl_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(22,0,0), FW_VER_ANY },
 };
 
 constinit Patterns olsc_patterns[] = {
-    { "olsc_6.0.0-14.1.2", "0x00..73....F9....4039", 42, 0, bl_cond, ret1_patch, ret1_applied, true, 0, MAKEHOSVERSION(6,0,0), MAKEHOSVERSION(14,1,2) },
-    { "olsc_15.0.0-18.1.0", "0x00..73....F9....4039", 38, 0, bl_cond, ret1_patch, ret1_applied, true, 0, MAKEHOSVERSION(15,0,0), MAKEHOSVERSION(18,1,0) },
-    { "olsc_19.0.0+", "0x00..73....F9....4039", 42, 0, bl_cond, ret1_patch, ret1_applied, true, 0, MAKEHOSVERSION(19,0,0), FW_VER_ANY },
+    { "olsc_6.0.0-14.1.2", "0x00..73....F9....4039", 42, 0, bl_cond, ret1_patch_data, ret1_applied, true, 0, MAKEHOSVERSION(6,0,0), MAKEHOSVERSION(14,1,2) },
+    { "olsc_15.0.0-18.1.0", "0x00..73....F9....4039", 38, 0, bl_cond, ret1_patch_data, ret1_applied, true, 0, MAKEHOSVERSION(15,0,0), MAKEHOSVERSION(18,1,0) },
+    { "olsc_19.0.0+", "0x00..73....F9....4039", 42, 0, bl_cond, ret1_patch_data, ret1_applied, true, 0, MAKEHOSVERSION(19,0,0), FW_VER_ANY },
 };
 
 constinit Patterns nifm_patterns[] = {
-    { "ctest_1.0.0-19.0.1", "0x03..AAE003..AA......39....04F8........E0", -29, 0, ctest_cond, ctest_patch, ctest_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(19,0,1) },
-    { "ctest_20.0.0+", "0x03..AA......AA..................0314AA....14AA", -17, 0, ctest_cond, ctest_patch, ctest_applied, true, 0, MAKEHOSVERSION(20,0,0), FW_VER_ANY },
+    { "ctest_1.0.0-19.0.1", "0x03..AAE003..AA......39....04F8........E0", -29, 0, ctest_cond, ctest_patch_data, ctest_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(19,0,1) },
+    { "ctest_20.0.0+", "0x03..AA......AA..................0314AA....14AA", -17, 0, ctest_cond, ctest_patch_data, ctest_applied, true, 0, MAKEHOSVERSION(20,0,0), FW_VER_ANY },
 };
 
 constinit Patterns nim_patterns[] = {
-    { "blankcal0crashfix_17.0.0+", "0x00351F2003D5..............................97....0094....00..........61", 6, 0, adr_cond, mov2_patch, mov2_applied, true, 0, MAKEHOSVERSION(17,0,0), FW_VER_ANY },
-    { "blockfirmwareupdates_1.0.0-5.1.0", "0x1139F3", -30, 0, block_fw_updates_cond, mov0_ret_patch, mov0_ret_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(5,1,0) },
-    { "blockfirmwareupdates_6.0.0-6.2.0", "0xF30301AA..4E", -40, 0, block_fw_updates_cond, mov0_ret_patch, mov0_ret_applied, true, 0, MAKEHOSVERSION(6,0,0), MAKEHOSVERSION(6,2,0) },
-    { "blockfirmwareupdates_7.0.0-10.2.0", "0xF30301AA014C", -36, 0, block_fw_updates_cond, mov0_ret_patch, mov0_ret_applied, true, 0, MAKEHOSVERSION(7,0,0), MAKEHOSVERSION(10,2,0) },
-    { "blockfirmwareupdates_11.0.0-11.0.1", "0x9AF0....................C0035FD6", 16, 0, block_fw_updates_cond, mov0_ret_patch, mov0_ret_applied, true, 0, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(11,0,1) },
-    { "blockfirmwareupdates_12.0.0+", "0x41....4C............C0035FD6", 14, 0, block_fw_updates_cond, mov0_ret_patch, mov0_ret_applied, true, 0, MAKEHOSVERSION(12,0,0), FW_VER_ANY },
+    { "blankcal0crashfix_17.0.0+", "0x00351F2003D5..............................97....0094....00..........61", 6, 0, adr_cond, mov2_patch_data, mov2_applied, true, 0, MAKEHOSVERSION(17,0,0), FW_VER_ANY },
+    { "blockfirmwareupdates_1.0.0-5.1.0", "0x1139F3", -30, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(5,1,0) },
+    { "blockfirmwareupdates_6.0.0-6.2.0", "0xF30301AA..4E", -40, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(6,0,0), MAKEHOSVERSION(6,2,0) },
+    { "blockfirmwareupdates_7.0.0-10.2.0", "0xF30301AA014C", -36, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(7,0,0), MAKEHOSVERSION(10,2,0) },
+    { "blockfirmwareupdates_11.0.0-11.0.1", "0x9AF0....................C0035FD6", 16, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(1[...]
+    { "blockfirmwareupdates_12.0.0+", "0x41....4C............C0035FD6", 14, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(12,0,0), FW_VER_ANY },
 };
 
 constinit Patterns ns_patterns[] = {
-    { "force_gamecard_region_to_global", "0x35E8134039F4031F..68020039", 9, 0, strb_cond, strb0_patch, strb0_applied, true, 1, MAKEHOSVERSION(9,0,0), FW_VER_ANY },
+    { "force_gamecard_region_to_global", "0x35E8134039F4031F..68020039", 9, 0, strb_cond, strb0_patch_data, strb0_applied, true, 1, MAKEHOSVERSION(9,0,0), FW_VER_ANY },
 };
 
 // NOTE: add system titles that you want to be patched to this table.
@@ -349,6 +350,19 @@ auto is_emummc() -> bool {
     return (paths.unk[0] != '\0') || (paths.nintendo[0] != '\0');
 }
 
+// Check if pattern version is valid, with caching
+auto is_version_valid(const Patterns& p) -> bool {
+    if (!p.version_checked) {
+        p.version_checked = true;
+        p.version_valid = !VERSION_SKIP ||
+            ((p.min_fw_ver == FW_VER_ANY || p.min_fw_ver <= FW_VERSION) &&
+             (p.max_fw_ver == FW_VER_ANY || p.max_fw_ver >= FW_VERSION) &&
+             (p.min_ams_ver == FW_VER_ANY || p.min_ams_ver <= AMS_VERSION) &&
+             (p.max_ams_ver == FW_VER_ANY || p.max_ams_ver >= AMS_VERSION));
+    }
+    return p.version_valid;
+}
+
 void patcher(Handle handle, const u8* data, size_t data_size, u64 addr, u64 base_addr, std::span<Patterns> patterns) {
     for (auto& p : patterns) {
         // skip if disabled (controller by config.ini)
@@ -356,12 +370,8 @@ void patcher(Handle handle, const u8* data, size_t data_size, u64 addr, u64 base
             continue;
         }
 
-        // skip if version isn't valid
-        if (VERSION_SKIP &&
-            ((p.min_fw_ver && p.min_fw_ver > FW_VERSION) ||
-            (p.max_fw_ver && p.max_fw_ver < FW_VERSION) ||
-            (p.min_ams_ver && p.min_ams_ver > AMS_VERSION) ||
-            (p.max_ams_ver && p.max_ams_ver < AMS_VERSION))) {
+        // skip if version isn't valid (with caching)
+        if (!is_version_valid(p)) {
             p.result = PatchResult::SKIPPED;
             continue;
         }
@@ -414,11 +424,10 @@ void patcher(Handle handle, const u8* data, size_t data_size, u64 addr, u64 base
                     p.logged_offset = logged_offset;
                     break;
                 } else if (p.cond(inst)) {
-                    const auto patch_data = p.patch(inst);
-
-                    // todo: log failed writes, although this should in theory never fail
-                    if (R_FAILED(svcWriteDebugProcessMemory(handle, &patch_data, patch_offset, patch_data.size))) {
+                    // TODO: log failed writes to a debug file or log buffer
+                    if (R_FAILED(svcWriteDebugProcessMemory(handle, (void*)p.patch_data.data, patch_offset, p.patch_data.size))) {
                         p.result = PatchResult::FAILED_WRITE;
+                        // TODO: implement logging for failed writes
                     } else {
                         p.result = PatchResult::PATCHED_SYSPATCH;
                     }
@@ -460,6 +469,8 @@ auto apply_patch(PatchEntry& patch) -> bool {
         p.last_match_addr = 0;
         p.has_last_match = false;
         p.logged_offset = 0;
+        p.version_checked = false;
+        p.version_valid = false;
         if (p.result != PatchResult::DISABLED) {
             p.result = PatchResult::NOT_FOUND;
         }
@@ -582,112 +593,31 @@ auto patch_result_to_str(PatchResult result) -> const char* {
     std::unreachable();
 }
 
-void offset_to_str(char* s, u64 offset) {
-    *s++ = '0';
-    *s++ = 'x';
-
-    bool wrote_digit = false;
-    for (int shift = 60; shift >= 0; shift -= 4) {
-        const auto nibble = static_cast<u8>((offset >> shift) & 0xF);
-        if (!wrote_digit && nibble == 0 && shift != 0) {
-            continue;
-        }
-
-        wrote_digit = true;
-        *s++ = nibble < 10 ? static_cast<char>('0' + nibble) : static_cast<char>('A' + nibble - 10);
-    }
-}
-
-void patch_result_to_log_str(char* s, PatchResult result, u64 offset) {
+void patch_result_to_log_str(char* s, size_t size, PatchResult result, u64 offset) {
     const auto* result_str = patch_result_to_str(result);
-    while (*result_str != '\0') {
-        *s++ = *result_str++;
-    }
-
+    
     if (offset != 0) {
-        *s++ = ' ';
-        *s++ = '(';
-        offset_to_str(s, offset);
-        while (*s != '\0') {
-            s++;
-        }
-        *s++ = ')';
+        snprintf(s, size, "%s (0x%lx)", result_str, offset);
+    } else {
+        snprintf(s, size, "%s", result_str);
     }
 }
 
-void num_2_str(char*& s, u16 num) {
-    u16 max_v = 1000;
-    if (num > 9) {
-        while (max_v >= 10) {
-            if (num >= max_v) {
-                while (max_v != 1) {
-                    *s++ = '0' + (num / max_v);
-                    num -= (num / max_v) * max_v;
-                    max_v /= 10;
-                }
-            } else {
-                max_v /= 10;
-            }
-        }
-    }
-    *s++ = '0' + (num); // always add 0 or 1's
+void version_to_str(char* s, size_t size, u32 ver) {
+    snprintf(s, size, "%u.%u.%u", 
+             (ver >> 16) & 0xFF, 
+             (ver >> 8) & 0xFF, 
+             ver & 0xFF);
 }
 
-void ms_2_str(char* s, u32 num) {
-    u32 max_v = 100;
-    *s++ = '0' + (num / 1000); // add seconds
-    num -= (num / 1000) * 1000;
-    *s++ = '.';
-
-    while (max_v >= 10) {
-        if (num >= max_v) {
-            while (max_v != 1) {
-                *s++ = '0' + (num / max_v);
-                num -= (num / max_v) * max_v;
-                max_v /= 10;
-            }
-        }
-        else {
-           *s++ = '0'; // append 0
-           max_v /= 10;
-        }
-    }
-    *s++ = '0' + (num); // always add 0 or 1's
-    *s++ = 's'; // in seconds
+void hash_to_str(char* s, size_t size, u32 hash) {
+    snprintf(s, size, "%08X", hash);
 }
 
-// eg, 852481 -> 13.2.1
-void version_to_str(char* s, u32 ver) {
-    for (int i = 0; i < 3; i++) {
-        num_2_str(s, (ver >> 16) & 0xFF);
-        if (i != 2) {
-            *s++ = '.';
-        }
-        ver <<= 8;
-    }
-}
-
-// eg, 0xAF66FF99 -> AF66FF99
-void hash_to_str(char* s, u32 hash) {
-    for (int i = 0; i < 4; i++) {
-        const auto num = (hash >> 24) & 0xFF;
-        const auto top = (num >> 4) & 0xF;
-        const auto bottom = (num >> 0) & 0xF;
-
-        constexpr auto a = [](u8 nib) -> char {
-            if (nib >= 0 && nib <= 9) { return '0' + nib; }
-            return 'a' + nib - 10;
-        };
-
-        *s++ = a(top);
-        *s++ = a(bottom);
-
-        hash <<= 8;
-    }
-}
-
-void keygen_to_str(char* s, u8 keygen) {
-    num_2_str(s, keygen);
+void ms_2_str(char* s, size_t size, u32 num) {
+    u32 seconds = num / 1000;
+    u32 milliseconds = num % 1000;
+    snprintf(s, size, "%u.%03us", seconds, milliseconds);
 }
 
 } // namespace
@@ -748,7 +678,7 @@ int main(int argc, char* argv[]) {
                     p.result = PatchResult::SKIPPED;
                 }
                 char log_value[96]{};
-                patch_result_to_log_str(log_value, p.result, p.logged_offset);
+                patch_result_to_log_str(log_value, sizeof(log_value), p.result, p.logged_offset);
                 ini_puts(patch.name, p.patch_name, log_value, log_path);
             }
         }
@@ -766,12 +696,12 @@ int main(int argc, char* argv[]) {
         // how long it took to patch
         char patch_time[20]{};
 
-        version_to_str(fw_version, FW_VERSION);
-        version_to_str(ams_version, AMS_VERSION);
-        version_to_str(ams_target_version, AMS_TARGET_VERSION);
-        keygen_to_str(ams_keygen, AMS_KEYGEN);
-        hash_to_str(ams_hash, AMS_HASH >> 32);
-        ms_2_str(patch_time, diff_ns/1000ULL/1000ULL);
+        version_to_str(fw_version, sizeof(fw_version), FW_VERSION);
+        version_to_str(ams_version, sizeof(ams_version), AMS_VERSION);
+        version_to_str(ams_target_version, sizeof(ams_target_version), AMS_TARGET_VERSION);
+        snprintf(ams_keygen, sizeof(ams_keygen), "%u", AMS_KEYGEN);
+        hash_to_str(ams_hash, sizeof(ams_hash), AMS_HASH >> 32);
+        ms_2_str(patch_time, sizeof(patch_time), diff_ns/1000ULL/1000ULL);
 
         // defined in the Makefile
         #define DATE (DATE_DAY "." DATE_MONTH "." DATE_YEAR " " DATE_HOUR ":" DATE_MIN ":" DATE_SEC)
