@@ -690,7 +690,7 @@ int main(int argc, char* argv[]) {
         // lowest fw supported by atmosphere
         char ams_target_version[12]{};
         // ???
-        char ams_keygen[3]{};
+        char ams_keygen[4]{}; // Changed from 3 to 4 to avoid truncation warning
         // git commit hash
         char ams_hash[9]{};
         // how long it took to patch
