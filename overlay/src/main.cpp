@@ -373,17 +373,6 @@ public:
     }
 };
 
-// Optimized: Navigation helper using lambda to avoid code duplication
-auto make_nav_listener(auto target_gui) {
-    return [](u64 keys) -> bool {
-        if (keys & HidNpadButton_A) {
-            tsl::changeTo(target_gui);
-            return true;
-        }
-        return false;
-    };
-}
-
 class GuiMain final : public tsl::Gui {
 private:
     AllPatchConfigs m_config;
