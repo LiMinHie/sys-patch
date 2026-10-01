@@ -70,7 +70,7 @@ struct PatchData {
         }
     }
 
-    constexpr auto cmp(const void* _data) -> bool {
+    constexpr auto cmp(const void* _data) const -> bool {
         return !std::memcmp(data, _data, size);
     }
 
@@ -241,7 +241,7 @@ constexpr auto strb0_applied(const u8* data, u32 inst) -> bool {
 }
 
 // patterns should be optimized in such a manner that they yield only one result, unless match_index selects a specific result.
-// patterns might yield results for more firmware versions, but if it yields more than one result (per firmware version), it should be condensed to near similar versions instead which only yields[...]
+// patterns might yield results for more firmware versions, but if it yields more than one result (per firmware version), it should be condensed to near similar versions instead which only yields one result.
 // a pattern should not contain the bytes being patched, they should be wildcarded.
 // if the bytes being patched align with the patch partially, then the partial bytes can be in the pattern, the same applies to if the pattern contains the length of the patch.
 // the bytes being tested are defined by the _cond, and does not need to be in the pattern, and shouldn't be in the pattern, if the bytes being tested are also the bytes being patched.
@@ -260,8 +260,8 @@ constexpr auto strb0_applied(const u8* data, u32 inst) -> bool {
 // designing new patterns should ideally conform to specification above.
 
 constinit Patterns fs_patterns[] = {
-    { "noacidsigchk_1.0.0-9.2.0", "0xC8FE4739", -24, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
-    { "noacidsigchk_1.0.0-9.2.0", "0x0210911F000072", -5, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) }, // moved to loader 10.0.0
+    { "noacidsigchk_1.0.0-9.2.0", "0xC8FE4739", -24, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) },
+    { "noacidsigchk_1.0.0-9.2.0", "0x0210911F000072", -5, 0, bl_cond, ret0_patch_data, ret0_applied, true, 0, FW_VER_ANY, MAKEHOSVERSION(9,2,0) },
     { "noncasigchk_1.0.0-3.0.2", "0x88..42..58", -4, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(3,0,2) },
     { "noncasigchk_4.0.0-16.1.0", "0x1E4839....00......0054", -17, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(4,0,0), MAKEHOSVERSION(16,1,0) },
     { "noncasigchk_17.0.0+", "0x0694....00..42..0091", -18, 0, tbz_cond, nop_patch_data, nop_applied, true, 0, MAKEHOSVERSION(17,0,0), FW_VER_ANY },
@@ -270,11 +270,11 @@ constinit Patterns fs_patterns[] = {
 };
 
 constinit Patterns ldr_patterns[] = {
-    { "noacidsigchk_10.0.0+", "0x009401C0BE121F00", 6, 2, cmp_cond, cmp_patch_data, cmp_applied, true, 0, FW_VER_ANY }, // 1F00016B - cmp w0, w1 patched to 1F00006B - cmp w0, w0
+    { "noacidsigchk_10.0.0+", "0x009401C0BE121F00", 6, 2, cmp_cond, cmp_patch_data, cmp_applied, true, 0, FW_VER_ANY },
 };
 
 constinit Patterns erpt_patterns[] = {
-    { "no_erpt", "0xFD7B02A9FD830091F55B04A9", -4, 0, sub_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, FW_VER_ANY }, // FF4305D1 - sub sp, sp, #0x150 patched to E0031F2AC0035FD6 - mov w0, wzr[...]
+    { "no_erpt", "0xFD7B02A9FD830091F55B04A9", -4, 0, sub_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, FW_VER_ANY },
 };
 
 constinit Patterns es_patterns[] = {
@@ -305,7 +305,7 @@ constinit Patterns nim_patterns[] = {
     { "blockfirmwareupdates_1.0.0-5.1.0", "0x1139F3", -30, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(1,0,0), MAKEHOSVERSION(5,1,0) },
     { "blockfirmwareupdates_6.0.0-6.2.0", "0xF30301AA..4E", -40, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(6,0,0), MAKEHOSVERSION(6,2,0) },
     { "blockfirmwareupdates_7.0.0-10.2.0", "0xF30301AA014C", -36, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(7,0,0), MAKEHOSVERSION(10,2,0) },
-    { "blockfirmwareupdates_11.0.0-11.0.1", "0x9AF0....................C0035FD6", 16, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(1[...]
+    { "blockfirmwareupdates_11.0.0-11.0.1", "0x9AF0....................C0035FD6", 16, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(11,0,1) },
     { "blockfirmwareupdates_12.0.0+", "0x41....4C............C0035FD6", 14, 0, block_fw_updates_cond, mov0_ret_patch_data, mov0_ret_applied, true, 0, MAKEHOSVERSION(12,0,0), FW_VER_ANY },
 };
 
